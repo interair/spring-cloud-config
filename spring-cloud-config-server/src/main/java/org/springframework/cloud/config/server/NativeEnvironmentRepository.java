@@ -17,9 +17,7 @@
 package org.springframework.cloud.config.server;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -68,8 +66,11 @@ public class NativeEnvironmentRepository implements EnvironmentRepository {
 
 	private ConfigurableEnvironment environment;
 
+	private List<EnvironmentEnricher> environmentEnrichers = new ArrayList<>();
+
 	public NativeEnvironmentRepository(ConfigurableEnvironment environment) {
 		this.environment = environment;
+		environmentEnrichers.add(new LoggerFileEnricher());
 	}
 
 	public void setFailOnError(boolean failOnError) {
@@ -100,11 +101,18 @@ public class NativeEnvironmentRepository implements EnvironmentRepository {
 		ConfigurableApplicationContext context = builder.run(args);
 		environment.getPropertySources().remove("profiles");
 		try {
-			return clean(new PassthruEnvironmentRepository(environment).findOne(config,
-					profile, label));
+			final Environment env = clean(new PassthruEnvironmentRepository(environment).findOne(config, profile, label));
+			enrichByThirdPartyConfiguration(env);
+			return env;
 		}
 		finally {
 			context.close();
+		}
+	}
+
+	protected void enrichByThirdPartyConfiguration(Environment env) {
+		for (EnvironmentEnricher environmentEnricher : environmentEnrichers) {
+			environmentEnricher.processEnvironment(env, searchLocations);
 		}
 	}
 
@@ -135,16 +143,8 @@ public class NativeEnvironmentRepository implements EnvironmentRepository {
 					normal = StringUtils.cleanPath(new File(normal.substring("file:".length()))
 							.getAbsolutePath());
 				}
-				for (String pattern : StringUtils
-						.commaDelimitedListToStringArray(getLocations(searchLocations,
-								result.getLabel()))) {
-					if (!pattern.contains(":")) {
-						pattern = "file:" + pattern;
-					}
-					if (pattern.startsWith("file:")) {
-						pattern = StringUtils.cleanPath(new File(pattern
-								.substring("file:".length())).getAbsolutePath()) + "/";
-					}
+				for (String pattern : getLocations(result.getLabel(), searchLocations)) {
+					pattern = normalize(pattern);
 					if (logger.isTraceEnabled()) {
 						logger.trace("Testing pattern: " + pattern
 								+ " with property source: " + name);
@@ -169,6 +169,21 @@ public class NativeEnvironmentRepository implements EnvironmentRepository {
 		return result;
 	}
 
+	static String normalize(String pattern) {
+		if (!pattern.contains(":")) {
+			pattern = "file:" + pattern;
+		}
+		if (pattern.startsWith("file:")) {
+			pattern = StringUtils.cleanPath(new File(pattern
+				.substring("file:".length())).getAbsolutePath()) + "/";
+		}
+		return pattern;
+	}
+
+	static String[] getLocations(String label, String[] searchLocations) {
+		return StringUtils.commaDelimitedListToStringArray(getLocations(searchLocations, label));
+	}
+
 	private String[] getArgs(String config, String label) {
 		List<String> list = new ArrayList<String>();
 		if (!config.startsWith("application")) {
@@ -185,7 +200,7 @@ public class NativeEnvironmentRepository implements EnvironmentRepository {
 		return list.toArray(new String[0]);
 	}
 
-	private String getLocations(String[] locations, String label) {
+	static String getLocations(String[] locations, String label) {
 		List<String> output = new ArrayList<String>();
 		for (String location : locations) {
 			output.add(location);
@@ -213,7 +228,7 @@ public class NativeEnvironmentRepository implements EnvironmentRepository {
 		}
 	}
 
-	private boolean isDirectory(String location) {
+	static boolean isDirectory(String location) {
 		return !location.endsWith(".properties") && !location.endsWith(".yml")
 				&& !location.endsWith(".yaml");
 	}
